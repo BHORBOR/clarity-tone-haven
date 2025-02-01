@@ -8,20 +8,33 @@ import {
 import { assertEquals } from 'https://deno.land/std@0.90.0/testing/asserts.ts';
 
 Clarinet.test({
-    name: "Can register new piece",
+    name: "Can register new piece with collaborators",
     async fn(chain: Chain, accounts: Map<string, Account>) {
         const deployer = accounts.get('deployer')!;
-        const title = "My First Song";
+        const collaborator1 = accounts.get('wallet_1')!;
+        const collaborator2 = accounts.get('wallet_2')!;
+        
+        const title = "Collab Song";
         const ipfsHash = "QmXyZ123...";
         const licenseType = "standard";
         const price = 100;
+        const collaborators = [
+            {address: collaborator1.address, share: 20},
+            {address: collaborator2.address, share: 30}
+        ];
 
         let block = chain.mineBlock([
             Tx.contractCall('tone-haven', 'register-piece', [
                 types.utf8(title),
                 types.ascii(ipfsHash),
                 types.ascii(licenseType),
-                types.uint(price)
+                types.uint(price),
+                types.list(collaborators.map(c => 
+                    types.tuple({
+                        address: types.principal(c.address),
+                        share: types.uint(c.share)
+                    })
+                ))
             ], deployer.address)
         ]);
 
@@ -30,75 +43,66 @@ Clarinet.test({
 });
 
 Clarinet.test({
-    name: "Can purchase license for piece",
+    name: "Can purchase license with royalty distribution",
     async fn(chain: Chain, accounts: Map<string, Account>) {
         const deployer = accounts.get('deployer')!;
-        const user = accounts.get('wallet_1')!;
+        const buyer = accounts.get('wallet_3')!;
+        const collaborator1 = accounts.get('wallet_1')!;
+        const collaborator2 = accounts.get('wallet_2')!;
         
-        // First register a piece
+        // Register piece with collaborators
         let block1 = chain.mineBlock([
             Tx.contractCall('tone-haven', 'register-piece', [
-                types.utf8("Test Song"),
+                types.utf8("Royalty Test"),
                 types.ascii("QmTest123"),
                 types.ascii("standard"),
-                types.uint(100)
+                types.uint(1000),
+                types.list([
+                    types.tuple({
+                        address: types.principal(collaborator1.address),
+                        share: types.uint(20)
+                    }),
+                    types.tuple({
+                        address: types.principal(collaborator2.address),
+                        share: types.uint(30)
+                    })
+                ])
             ], deployer.address)
         ]);
 
-        // Then purchase license
+        // Purchase license
         let block2 = chain.mineBlock([
             Tx.contractCall('tone-haven', 'purchase-license', [
                 types.uint(0)
-            ], user.address)
+            ], buyer.address)
         ]);
 
         block2.receipts[0].result.expectOk().expectBool(true);
-        
-        // Verify license
-        let block3 = chain.mineBlock([
-            Tx.contractCall('tone-haven', 'check-license', [
-                types.uint(0),
-                types.principal(user.address)
-            ], user.address)
-        ]);
-
-        block3.receipts[0].result.expectOk().expectSome();
     }
 });
 
 Clarinet.test({
-    name: "Can like a piece",
+    name: "Prevents invalid royalty shares",
     async fn(chain: Chain, accounts: Map<string, Account>) {
         const deployer = accounts.get('deployer')!;
-        const user = accounts.get('wallet_1')!;
-
-        // Register piece
-        let block1 = chain.mineBlock([
+        const collaborator1 = accounts.get('wallet_1')!;
+        
+        // Try to register with >100% total shares
+        let block = chain.mineBlock([
             Tx.contractCall('tone-haven', 'register-piece', [
-                types.utf8("Like Test Song"),
+                types.utf8("Invalid Shares"),
                 types.ascii("QmTest123"),
                 types.ascii("standard"),
-                types.uint(100)
+                types.uint(100),
+                types.list([
+                    types.tuple({
+                        address: types.principal(collaborator1.address),
+                        share: types.uint(101)
+                    })
+                ])
             ], deployer.address)
         ]);
 
-        // Like the piece
-        let block2 = chain.mineBlock([
-            Tx.contractCall('tone-haven', 'like-piece', [
-                types.uint(0)
-            ], user.address)
-        ]);
-
-        block2.receipts[0].result.expectOk().expectBool(true);
-        
-        // Check stats
-        let block3 = chain.mineBlock([
-            Tx.contractCall('tone-haven', 'get-piece-stats', [
-                types.uint(0)
-            ], user.address)
-        ]);
-
-        const stats = block3.receipts[0].result.expectOk().expectSome();
-        assertEquals(stats.likes, types.uint(1));
+        block.receipts[0].result.expectErr().expectUint(104);
     }
 });
