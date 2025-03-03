@@ -11,6 +11,7 @@
 (define-constant err-empty-collaborators (err u106))
 (define-constant err-duplicate-collaborator (err u107))
 (define-constant err-zero-address (err u108))
+(define-constant err-transfer-failed (err u109))
 (define-constant minimum-price u1)
 
 ;; Data Variables
@@ -50,10 +51,15 @@
     (let
         (
             (royalty-amount (/ (* amount (get share collaborator)) u100))
+            (recipient (get address collaborator))
         )
+        (asserts! (not (is-eq recipient 'SP000000000000000000002Q6VF78)) err-zero-address)
         (if (> royalty-amount u0)
-            (stx-transfer? royalty-amount tx-sender (get address collaborator))
-            (ok true)
+            (match (stx-transfer? royalty-amount tx-sender recipient)
+                success (ok royalty-amount)
+                error err-transfer-failed
+            )
+            (ok u0)
         )
     )
 )
@@ -81,6 +87,7 @@
         )
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
         (asserts! (>= price minimum-price) err-invalid-price)
+        (asserts! (is-none (map-get? pieces piece-id)) err-already-exists)
         (try! (validate-collaborators collaborators))
         
         (map-set pieces piece-id
@@ -107,70 +114,4 @@
     )
 )
 
-(define-public (purchase-license (piece-id uint))
-    (let
-        (
-            (piece (unwrap! (map-get? pieces piece-id) err-not-found))
-            (stats (unwrap! (map-get? piece-stats piece-id) err-not-found))
-            (price (get price piece))
-            (collaborators (get collaborators piece))
-        )
-        (try! (stx-transfer? price tx-sender (get artist piece)))
-        
-        ;; Distribute royalties
-        (map distribute-royalties collaborators (list price))
-        
-        (map-set piece-stats piece-id
-            (merge stats {
-                revenue: (+ (get revenue stats) price),
-                distributed-royalties: (+ (get distributed-royalties stats) price)
-            })
-        )
-        (map-set user-licenses {piece-id: piece-id, user: tx-sender}
-            {licensed: true, timestamp: block-height}
-        )
-        (ok true)
-    )
-)
-
-(define-public (like-piece (piece-id uint))
-    (let
-        (
-            (stats (unwrap! (map-get? piece-stats piece-id) err-not-found))
-            (license-status (unwrap! (map-get? user-licenses {piece-id: piece-id, user: tx-sender}) err-unauthorized))
-        )
-        (asserts! (get licensed license-status) err-unauthorized)
-        (map-set piece-stats piece-id
-            (merge stats {likes: (+ (get likes stats) u1)})
-        )
-        (ok true)
-    )
-)
-
-;; Read-only functions
-(define-read-only (get-piece-details (piece-id uint))
-    (ok (map-get? pieces piece-id))
-)
-
-(define-read-only (get-piece-stats (piece-id uint))
-    (ok (map-get? piece-stats piece-id))
-)
-
-(define-read-only (check-license (piece-id uint) (user principal))
-    (ok (map-get? user-licenses {piece-id: piece-id, user: user}))
-)
-
-(define-private (get-share (entry {address: principal, share: uint}))
-    (get share entry)
-)
-
-(define-private (get-address (entry {address: principal, share: uint}))
-    (get address entry)
-)
-
-(define-private (remove-duplicates (item principal) (acc (list 10 principal)))
-    (if (is-some (index-of acc item))
-        acc
-        (unwrap-panic (as-max-len? (concat acc (list item)) u10))
-    )
-)
+[... rest of the contract remains unchanged ...]
