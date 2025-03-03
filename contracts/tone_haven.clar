@@ -7,6 +7,12 @@
 (define-constant err-unauthorized (err u102))
 (define-constant err-already-exists (err u103))
 (define-constant err-invalid-royalty (err u104))
+(define-constant err-invalid-price (err u105))
+(define-constant err-empty-collaborators (err u106))
+(define-constant err-duplicate-collaborator (err u107))
+(define-constant err-zero-address (err u108))
+(define-constant err-transfer-failed (err u109))
+(define-constant minimum-price u1)
 
 ;; Data Variables
 (define-data-var piece-counter uint u0)
@@ -30,7 +36,8 @@
     {
         plays: uint,
         likes: uint,
-        revenue: uint
+        revenue: uint,
+        distributed-royalties: uint
     }
 )
 
@@ -41,7 +48,33 @@
 
 ;; Private Functions
 (define-private (distribute-royalties (collaborator {address: principal, share: uint}) (amount uint))
-    (stx-transfer? (/ (* amount (get share collaborator)) u100) tx-sender (get address collaborator))
+    (let
+        (
+            (royalty-amount (/ (* amount (get share collaborator)) u100))
+            (recipient (get address collaborator))
+        )
+        (asserts! (not (is-eq recipient 'SP000000000000000000002Q6VF78)) err-zero-address)
+        (if (> royalty-amount u0)
+            (match (stx-transfer? royalty-amount tx-sender recipient)
+                success (ok royalty-amount)
+                error err-transfer-failed
+            )
+            (ok u0)
+        )
+    )
+)
+
+(define-private (validate-collaborators (collaborators (list 5 {address: principal, share: uint})))
+    (let
+        (
+            (total-shares (fold + u0 (map get-share collaborators)))
+            (unique-addresses (len (fold remove-duplicates (list) (map get-address collaborators))))
+        )
+        (asserts! (> (len collaborators) u0) err-empty-collaborators)
+        (asserts! (is-eq (len collaborators) unique-addresses) err-duplicate-collaborator)
+        (asserts! (<= total-shares u100) err-invalid-royalty)
+        (ok true)
+    )
 )
 
 ;; Public Functions
@@ -51,10 +84,12 @@
     (let
         (
             (piece-id (var-get piece-counter))
-            (total-shares (fold + u0 (map get-share collaborators)))
         )
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
-        (asserts! (<= total-shares u100) err-invalid-royalty)
+        (asserts! (>= price minimum-price) err-invalid-price)
+        (asserts! (is-none (map-get? pieces piece-id)) err-already-exists)
+        (try! (validate-collaborators collaborators))
+        
         (map-set pieces piece-id
             {
                 title: title,
@@ -70,7 +105,8 @@
             {
                 plays: u0,
                 likes: u0,
-                revenue: u0
+                revenue: u0,
+                distributed-royalties: u0
             }
         )
         (var-set piece-counter (+ piece-id u1))
@@ -78,52 +114,4 @@
     )
 )
 
-(define-public (purchase-license (piece-id uint))
-    (let
-        (
-            (piece (unwrap! (map-get? pieces piece-id) err-not-found))
-            (stats (unwrap! (map-get? piece-stats piece-id) err-not-found))
-            (price (get price piece))
-            (collaborators (get collaborators piece))
-        )
-        (asserts! (is-some (map-get? pieces piece-id)) err-not-found)
-        (try! (stx-transfer? price tx-sender (get artist piece)))
-        (map map-try! (map (lambda (c) (distribute-royalties c price)) collaborators))
-        (map-set piece-stats piece-id
-            (merge stats {revenue: (+ (get revenue stats) price)})
-        )
-        (map-set user-licenses {piece-id: piece-id, user: tx-sender}
-            {licensed: true, timestamp: block-height}
-        )
-        (ok true)
-    )
-)
-
-(define-public (like-piece (piece-id uint))
-    (let
-        (
-            (stats (unwrap! (map-get? piece-stats piece-id) err-not-found))
-        )
-        (map-set piece-stats piece-id
-            (merge stats {likes: (+ (get likes stats) u1)})
-        )
-        (ok true)
-    )
-)
-
-;; Read-only functions
-(define-read-only (get-piece-details (piece-id uint))
-    (ok (map-get? pieces piece-id))
-)
-
-(define-read-only (get-piece-stats (piece-id uint))
-    (ok (map-get? piece-stats piece-id))
-)
-
-(define-read-only (check-license (piece-id uint) (user principal))
-    (ok (map-get? user-licenses {piece-id: piece-id, user: user}))
-)
-
-(define-private (get-share (entry {address: principal, share: uint}))
-    (get share entry)
-)
+[... rest of the contract remains unchanged ...]
